@@ -17,7 +17,13 @@ use relm4::{Sender, gtk::gdk::Key};
 pub struct Crop {
     pos: Vec2D,
     size: Vec2D,
-    active: bool,
+    // True only while the crop area is being interactively created or adjusted, i.e. between
+    // begin_drag and end_drag. An existing crop is always applied to the rendered output (see
+    // render_native_resolution), so releasing the mouse is the commit and there is no pending
+    // state left for Enter to confirm. Staying "editing" after the drag would make Escape reset
+    // the crop instead of running the configured escape actions, silently dropping the crop the
+    // user just made.
+    editing: bool,
 }
 
 #[derive(Default)]
@@ -36,7 +42,7 @@ impl Crop {
         Self {
             pos,
             size: Vec2D::zero(),
-            active: true,
+            editing: true,
         }
     }
 
@@ -132,16 +138,16 @@ impl Drawable for Crop {
         canvas.fill_path(&shadow_path, &shadow_paint);
         canvas.stroke_path(&border_path, &border_paint);
 
-        if self.active {
-            Self::draw_single_handle(canvas, self.pos, scale);
-            Self::draw_single_handle(canvas, self.pos + Vec2D::new(size.x / 2.0, 0.0), scale);
-            Self::draw_single_handle(canvas, self.pos + Vec2D::new(size.x, 0.0), scale);
-            Self::draw_single_handle(canvas, self.pos + Vec2D::new(0.0, size.y / 2.0), scale);
-            Self::draw_single_handle(canvas, self.pos + Vec2D::new(0.0, size.y), scale);
-            Self::draw_single_handle(canvas, self.pos + Vec2D::new(size.x / 2.0, size.y), scale);
-            Self::draw_single_handle(canvas, self.pos + Vec2D::new(size.x, size.y), scale);
-            Self::draw_single_handle(canvas, self.pos + Vec2D::new(size.x, size.y / 2.0), scale);
-        }
+        // Handles are drawn for as long as a crop exists: the area stays adjustable, so hiding
+        // them once the drag ends would suggest the crop can no longer be changed.
+        Self::draw_single_handle(canvas, self.pos, scale);
+        Self::draw_single_handle(canvas, self.pos + Vec2D::new(size.x / 2.0, 0.0), scale);
+        Self::draw_single_handle(canvas, self.pos + Vec2D::new(size.x, 0.0), scale);
+        Self::draw_single_handle(canvas, self.pos + Vec2D::new(0.0, size.y / 2.0), scale);
+        Self::draw_single_handle(canvas, self.pos + Vec2D::new(0.0, size.y), scale);
+        Self::draw_single_handle(canvas, self.pos + Vec2D::new(size.x / 2.0, size.y), scale);
+        Self::draw_single_handle(canvas, self.pos + Vec2D::new(size.x, size.y), scale);
+        Self::draw_single_handle(canvas, self.pos + Vec2D::new(size.x, size.y / 2.0), scale);
 
         canvas.restore();
         Ok(())
@@ -284,7 +290,6 @@ impl CropTool {
     }
 
     fn begin_drag(&mut self, pos: Vec2D) -> ToolUpdateResult {
-        let mut activate = false;
         match &self.crop {
             None => {
                 // No crop exists, create a new one
@@ -292,9 +297,6 @@ impl CropTool {
                 self.action = Some(CropToolAction::NewCrop);
             }
             Some(c) => {
-                if !c.active {
-                    activate = true;
-                }
                 if let Some(handle) = c.test_handle_hit(pos, CropTool::HANDLE_MARGIN_IN_2) {
                     // Crop exists and we are near a handle, drag it
                     self.action = Some(CropToolAction::DragHandle(DragHandleState {
@@ -320,8 +322,8 @@ impl CropTool {
                 }
             }
         }
-        if activate && let Some(c) = &mut self.crop {
-            c.active = true;
+        if let Some(c) = &mut self.crop {
+            c.editing = true;
         }
         ToolUpdateResult::Redraw
     }
@@ -369,18 +371,21 @@ impl CropTool {
             // committed to the drawables stack
             CropToolAction::NewCrop => {
                 crop.size = direction;
+                crop.editing = false;
                 self.action = None;
                 self.emit_crop_dimensions_update();
                 ToolUpdateResult::Redraw
             }
             CropToolAction::DragHandle(state) => {
                 Self::apply_drag_handle_transformation(crop, state, direction);
+                crop.editing = false;
                 self.action = None;
                 self.emit_crop_dimensions_update();
                 ToolUpdateResult::Redraw
             }
             CropToolAction::Move(state) => {
                 crop.pos = state.start + direction;
+                crop.editing = false;
                 self.action = None;
                 self.emit_crop_dimensions_update();
                 ToolUpdateResult::Redraw
@@ -391,11 +396,10 @@ impl CropTool {
 
 impl Tool for CropTool {
     fn active(&self) -> bool {
-        if let Some(c) = &self.crop {
-            c.active
-        } else {
-            false
-        }
+        // A crop that exists is always applied, so the tool counts as active for as long as there
+        // is one. This is what keeps the commit/dismiss buttons in the style toolbar usable after
+        // the drag ended, which is the mouse-only way to reset a crop.
+        self.crop.is_some()
     }
 
     fn input_enabled(&self) -> bool {
@@ -412,9 +416,14 @@ impl Tool for CropTool {
 
     fn handle_key_event(&mut self, event: KeyEventMsg) -> ToolUpdateResult {
         match event.key {
+            // Only an in-progress drag is cancelled/confirmed here. Once the drag has ended the
+            // crop is a finished result, so both keys fall through to the actions the user
+            // configured for them (actions-on-escape / actions-on-enter) with the crop applied.
+            // Note that when Escape does reset the crop it keeps swallowing the event, so it never
+            // resets the crop and copies the uncropped image in one press.
             //FIXME: use if let guards as soon as they're stabilized (1.95)
             Key::Escape if self.crop.is_some() => {
-                if self.crop.as_mut().unwrap().active {
+                if self.crop.as_mut().unwrap().editing {
                     self.handle_dismissed()
                 } else {
                     ToolUpdateResult::Unmodified
@@ -422,7 +431,7 @@ impl Tool for CropTool {
             }
             //FIXME: use if let guards as soon as they're stabilized (1.95)
             Key::Return if self.crop.is_some() => {
-                if self.crop.as_mut().unwrap().active {
+                if self.crop.as_mut().unwrap().editing {
                     self.handle_deactivated()
                 } else {
                     ToolUpdateResult::Unmodified
@@ -441,8 +450,7 @@ impl Tool for CropTool {
             MouseEventType::Click
                 if event.button == MouseButton::Secondary
                     && ctrl_pressed
-                    && let Some(crop) = &self.crop
-                    && crop.active =>
+                    && self.crop.is_some() =>
             {
                 self.handle_dismissed()
             }
@@ -460,8 +468,9 @@ impl Tool for CropTool {
     }
 
     fn handle_activated(&mut self) -> ToolUpdateResult {
-        if let Some(c) = &mut self.crop {
-            c.active = true;
+        // Re-selecting the tool must not put an existing crop back into editing state, or Escape
+        // would silently reset it again.
+        if self.crop.is_some() {
             return ToolUpdateResult::Redraw;
         }
         ToolUpdateResult::Unmodified
@@ -469,7 +478,7 @@ impl Tool for CropTool {
 
     fn handle_deactivated(&mut self) -> ToolUpdateResult {
         if let Some(c) = &mut self.crop {
-            c.active = false;
+            c.editing = false;
         }
         self.action = None;
         ToolUpdateResult::Redraw
@@ -498,5 +507,178 @@ impl Tool for CropTool {
 
     fn set_sender(&mut self, sender: Sender<SketchBoardInput>) {
         self.sender = Some(sender);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mouse_event(type_: MouseEventType, button: MouseButton, pos: Vec2D) -> MouseEventMsg {
+        MouseEventMsg {
+            type_,
+            button,
+            modifier: ModifierType::empty(),
+            screen_pos: pos,
+            is_touchpad: false,
+            pos,
+            n_pressed: 1,
+            release: false,
+        }
+    }
+
+    fn key_event(key: Key) -> KeyEventMsg {
+        KeyEventMsg::new(key, 0, ModifierType::empty())
+    }
+
+    /// Draw a crop area: press at `pos`, drag by `size`, release. Positions for drag updates are
+    /// relative to the start of the drag, mirroring what the sketch board passes in.
+    fn draw_crop(tool: &mut CropTool, pos: Vec2D, size: Vec2D) {
+        tool.handle_mouse_event(mouse_event(
+            MouseEventType::BeginDrag,
+            MouseButton::Primary,
+            pos,
+        ));
+        tool.handle_mouse_event(mouse_event(
+            MouseEventType::UpdateDrag,
+            MouseButton::Primary,
+            size,
+        ));
+        tool.handle_mouse_event(mouse_event(
+            MouseEventType::EndDrag,
+            MouseButton::Primary,
+            size,
+        ));
+    }
+
+    #[test]
+    fn releasing_the_mouse_finishes_the_crop() {
+        let mut tool = CropTool::default();
+        draw_crop(&mut tool, Vec2D::new(100.0, 100.0), Vec2D::new(50.0, 40.0));
+
+        let (pos, size) = tool.get_crop().expect("crop exists").get_rectangle();
+        assert_eq!((pos.x, pos.y), (100.0, 100.0));
+        assert_eq!((size.x, size.y), (50.0, 40.0));
+        assert!(!tool.get_crop().unwrap().editing);
+        // The tool stays "active" so the toolbar commit/dismiss buttons remain usable.
+        assert!(tool.active());
+    }
+
+    #[test]
+    fn escape_after_drawing_keeps_the_crop_and_falls_through() {
+        let mut tool = CropTool::default();
+        draw_crop(&mut tool, Vec2D::new(10.0, 10.0), Vec2D::new(30.0, 30.0));
+
+        let result = tool.handle_key_event(key_event(Key::Escape));
+
+        // Unmodified lets the sketch board run the configured actions-on-escape, with the crop
+        // still in place, instead of silently resetting it.
+        assert!(matches!(result, ToolUpdateResult::Unmodified));
+        assert!(tool.get_crop().is_some());
+    }
+
+    #[test]
+    fn enter_after_drawing_keeps_the_crop_and_falls_through() {
+        let mut tool = CropTool::default();
+        draw_crop(&mut tool, Vec2D::new(10.0, 10.0), Vec2D::new(30.0, 30.0));
+
+        let result = tool.handle_key_event(key_event(Key::Return));
+
+        assert!(matches!(result, ToolUpdateResult::Unmodified));
+        assert!(tool.get_crop().is_some());
+    }
+
+    #[test]
+    fn escape_mid_drag_resets_the_crop_without_leaking_the_event() {
+        let mut tool = CropTool::default();
+        tool.handle_mouse_event(mouse_event(
+            MouseEventType::BeginDrag,
+            MouseButton::Primary,
+            Vec2D::new(10.0, 10.0),
+        ));
+
+        let result = tool.handle_key_event(key_event(Key::Escape));
+
+        assert!(tool.get_crop().is_none());
+        // Stopping propagation is what keeps a crop-resetting Escape from also running
+        // actions-on-escape, which would copy the uncropped image.
+        assert!(matches!(result, ToolUpdateResult::RedrawAndStopPropagation));
+    }
+
+    #[test]
+    fn reselecting_the_tool_does_not_reopen_editing() {
+        let mut tool = CropTool::default();
+        draw_crop(&mut tool, Vec2D::new(10.0, 10.0), Vec2D::new(30.0, 30.0));
+
+        tool.handle_activated();
+        let result = tool.handle_key_event(key_event(Key::Escape));
+
+        assert!(matches!(result, ToolUpdateResult::Unmodified));
+        assert!(tool.get_crop().is_some());
+    }
+
+    #[test]
+    fn ctrl_right_click_resets_a_finished_crop() {
+        let mut tool = CropTool::default();
+        draw_crop(&mut tool, Vec2D::new(10.0, 10.0), Vec2D::new(30.0, 30.0));
+
+        let mut event = mouse_event(
+            MouseEventType::Click,
+            MouseButton::Secondary,
+            Vec2D::new(20.0, 20.0),
+        );
+        event.modifier = ModifierType::CONTROL_MASK;
+        let result = tool.handle_mouse_event(event);
+
+        assert!(tool.get_crop().is_none());
+        assert!(matches!(result, ToolUpdateResult::RedrawAndStopPropagation));
+    }
+
+    #[test]
+    fn ctrl_right_click_without_a_crop_falls_through() {
+        let mut tool = CropTool::default();
+
+        let mut event = mouse_event(
+            MouseEventType::Click,
+            MouseButton::Secondary,
+            Vec2D::new(20.0, 20.0),
+        );
+        event.modifier = ModifierType::CONTROL_MASK;
+        let result = tool.handle_mouse_event(event);
+
+        // Otherwise the crop tool would swallow actions-on-right-click.
+        assert!(matches!(result, ToolUpdateResult::Unmodified));
+    }
+
+    #[test]
+    fn adjusting_a_handle_finishes_editing_again() {
+        let mut tool = CropTool::default();
+        draw_crop(
+            &mut tool,
+            Vec2D::new(100.0, 100.0),
+            Vec2D::new(100.0, 100.0),
+        );
+
+        // Grab the bottom right corner and drag it further out.
+        tool.handle_mouse_event(mouse_event(
+            MouseEventType::BeginDrag,
+            MouseButton::Primary,
+            Vec2D::new(200.0, 200.0),
+        ));
+        assert!(tool.get_crop().unwrap().editing);
+        tool.handle_mouse_event(mouse_event(
+            MouseEventType::EndDrag,
+            MouseButton::Primary,
+            Vec2D::new(50.0, 50.0),
+        ));
+
+        assert!(!tool.get_crop().unwrap().editing);
+        let (pos, size) = tool.get_crop().unwrap().get_rectangle();
+        assert_eq!((pos.x, pos.y), (100.0, 100.0));
+        assert_eq!((size.x, size.y), (150.0, 150.0));
+        assert!(matches!(
+            tool.handle_key_event(key_event(Key::Escape)),
+            ToolUpdateResult::Unmodified
+        ));
     }
 }
