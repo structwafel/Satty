@@ -1135,26 +1135,25 @@ impl Component for SketchBoard {
                             } else if ke.is_one_of(Key::s, KeyMappingId::UsS)
                                 && ke.modifier == ModifierType::CONTROL_MASK
                             {
-                                self.renderer.request_render(&[Action::SaveToFile]);
-                                ToolUpdateResult::Unmodified
+                                // These go through handle_action, like the equivalent toolbar
+                                // buttons, so a tool with a pending drawable is committed before
+                                // the export. Rendering directly would e.g. bake the text editing
+                                // rectangle into the output.
+                                self.handle_action(&[Action::SaveToFile])
                             } else if ke.is_one_of(Key::s, KeyMappingId::UsS)
                                 && ke.modifier
                                     == (ModifierType::CONTROL_MASK | ModifierType::SHIFT_MASK)
                             {
-                                self.renderer.request_render(&[Action::SaveToFileAs]);
-                                ToolUpdateResult::Unmodified
+                                self.handle_action(&[Action::SaveToFileAs])
                             } else if ke.is_one_of(Key::c, KeyMappingId::UsC)
                                 && ke.modifier == ModifierType::CONTROL_MASK
                             {
-                                self.renderer.request_render(&[Action::SaveToClipboard]);
-                                ToolUpdateResult::Unmodified
+                                self.handle_action(&[Action::SaveToClipboard])
                             } else if ke.is_one_of(Key::c, KeyMappingId::UsC)
                                 && ke.modifier
                                     == (ModifierType::CONTROL_MASK | ModifierType::ALT_MASK)
                             {
-                                self.renderer
-                                    .request_render(&[Action::CopyFilepathToClipboard]);
-                                ToolUpdateResult::Unmodified
+                                self.handle_action(&[Action::CopyFilepathToClipboard])
                             } else if (ke.is_one_of(Key::d, KeyMappingId::UsD)
                                 || ke.is_one_of(Key::i, KeyMappingId::UsI))
                                 && ke.modifier
