@@ -1095,6 +1095,7 @@ impl Tool for TextTool {
                     });
                 }
                 Key::c | Key::C => {
+                    let mut copied = false;
                     if event.modifier == ModifierType::CONTROL_MASK
                         && let Some(text) = &self.text
                     {
@@ -1110,7 +1111,14 @@ impl Tool for TextTool {
 
                             let clipboard = display.unwrap().clipboard();
                             clipboard.set_text(&selected_text);
+                            copied = true;
                         }
+                    }
+                    if !copied {
+                        // Nothing was selected to copy (or this is Ctrl+Alt+C), so let the event
+                        // through instead of swallowing it: otherwise the global Ctrl+C /
+                        // Ctrl+Alt+C shortcuts do nothing at all while a text box is being edited.
+                        tool_update_result = ToolUpdateResult::Unmodified;
                     }
                 }
                 Key::x | Key::X => {
