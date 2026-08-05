@@ -46,7 +46,7 @@ All configuration is done either at the config file in `XDG_CONFIG_DIR/.config/s
 - <kbd>Enter</kbd>: as configured (see below), default: copy-to-clipboard (may be masked by active tool)
 - <kbd>Esc</kbd>: as configured (see below), default: exit (may be masked by active tool)
 - <kbd>Delete</kbd> reset (clear) <sup>experimental</sup> <sup>0.20.1</sup>
-- <kbd>Ctrl+C</kbd>: Save to clipboard (may be masked by active tool)
+- <kbd>Ctrl+C</kbd>: Save to clipboard (masked by the text tool only while text is selected, where it copies that text instead)
 - <kbd>Ctrl+Shift+D</kbd> or <kbd>Ctrl+Shift+I</kbd>: Open GTK inspector if not already opened
 - <kbd>Ctrl+S</kbd>: Save to specified output file
 - <kbd>Ctrl+Shift+S</kbd>: Save using file dialog <sup>0.20.0</sup>. The dialog uses `output-filename` as initial filename/path when available and remembers the last selected folder. <sup>0.21.0</sup>
@@ -100,9 +100,9 @@ Default single-key shortcuts:
 ### Tool Modifiers and Keys
 
 Crop:
-- Press <kbd>Esc</kbd> or <kbd>Ctrl</kbd>+right mouse<sup>0.22.0</sup> <sup>experimental</sup> button while editing to reset crop altogether <sup>0.21.0</sup>.
-- Press <kbd>Enter</kbd> or <kbd>Ctrl</kbd>+left mouse<sup>0.22.0</sup> <sup>experimental</sup> while editing to finish editing crop and keep the crop area active <sup>0.21.0</sup>.
-- Left click crop area when tool is active but not editing to resume editing<sup>0.21.0</sup>.
+- Releasing the mouse finishes the crop. It is applied to every save and copy from then on, and stays adjustable: drag its handles, edges or interior, or drag outside of it to start a new one.
+- Press <kbd>Ctrl</kbd>+right mouse<sup>0.22.0</sup> <sup>experimental</sup> button, or use the dismiss button in the style toolbar <sup>0.22.0</sup>, to reset the crop altogether.
+- <kbd>Esc</kbd> and <kbd>Enter</kbd> are not consumed by a finished crop, so they run the actions you configured for them with the crop applied. Only a drag that is still in progress is cancelled by <kbd>Esc</kbd>; in that case the event is consumed, so resetting a crop never also copies the uncropped image.
 
 Arrow and line:
 - <kbd>Shift</kbd> to make tool snap to 15° steps.
